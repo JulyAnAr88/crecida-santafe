@@ -1,28 +1,5 @@
 import { contours } from 'd3-contour';
 
-function nearestWet(width, height, x0, y0, lim, alturaDe, bloqueado, maxRadius = 14) {
-  for (let r = 1; r <= maxRadius; r++) {
-    let best = -1;
-    let bestH = Infinity;
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const x = x0 + dx;
-        const y = y0 + dy;
-        if (x < 0 || y < 0 || x >= width || y >= height) continue;
-        const i = y * width + x;
-        const h = alturaDe(i);
-        if (h <= lim && h < bestH && !bloqueado(i)) {
-          best = i;
-          bestH = h;
-        }
-      }
-    }
-    if (best >= 0) return best;
-  }
-  return -1;
-}
-
 function perpDistance(p, x1, y1, x2, y2) {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -93,11 +70,8 @@ export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009, terrap
   for (const [lon, lat] of seeds) {
     const [sx, sy] = dem.lonLatToGrid(lon, lat);
     if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
-    let i = sy * width + sx;
-    if (bloqueado(i) || alturaDe(i) > waterLevel) {
-      i = nearestWet(width, height, sx, sy, waterLevel, alturaDe, bloqueado);
-    }
-    if (i >= 0 && !mask[i]) {
+    const i = sy * width + sx;
+    if (!bloqueado(i) && alturaDe(i) <= waterLevel && !mask[i]) {
       mask[i] = 1;
       queue[tail++] = i;
     }

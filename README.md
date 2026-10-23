@@ -18,7 +18,7 @@ Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe
 - Visualizar el **polígono de inundación** calculado sobre un DEM.
 - Ver **distritos y vecinales** municipales.
 - Explorar la ciudad en **3D** con terreno, satélite y edificios extruidos.
-- Pintar en rojo los edificios cuya cota queda bajo el agua simulada.
+- Pintar en rojo los edificios **alcanzados por la máscara de inundación** (con los terraplenes como barrera).
 - Consultar la serie reciente y las máximas anuales desde 1925.
 - Ajustar la cota del cero del hidrómetro para calibrar el DEM.
 
@@ -27,9 +27,9 @@ Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe
 | Dato | Valor |
 |---|---:|
 | Edificios en 3D | 75.808 |
-| Edificios afectados en el récord de 1992 (7,43 m) | 28.195 |
-| Edificios afectados al máximo de 8,00 m | 38.926 |
-| Tiles vectoriales | 469 (7,9 MB) |
+| Edificios alcanzados en el récord de 1992 (7,43 m) | 9.380 |
+| Edificios alcanzados al máximo de 8,00 m | 17.440 |
+| Tiles vectoriales | 469 (8,4 MB) |
 | Hidrografía permanente | 810 features (1,2 MB) |
 | Río Salado · Recreo | serie 103, alerta 4,70 m |
 | Máximas anuales del Salado | 2001–2026 (récord 7,89 m) |
@@ -45,7 +45,7 @@ El dataset 3D incluye edificios con cota de terreno ≤ 18 m. Se excluyen las zo
 - MapLibre GL JS 5
 - `d3-contour` para los contornos de agua
 - DuckDB Spatial para generar los tiles (offline)
-- Datos estáticos: PBF, binario de cotas y JSON histórico
+- Datos estáticos: PBF, binario de alcanze y JSON histórico
 
 No hay backend ni claves de API.
 
@@ -79,7 +79,7 @@ npm run preview
 El build queda en `dist/`. La app usa `base: './'`, así que puede publicarse en la raíz o en un subdirectorio siempre que se copien también:
 
 ```text
-dist/data/edificios-cotas.bin
+dist/data/edificios-alcance.bin
 dist/data/agua-permanente.geojson
 dist/tiles/
 ```
@@ -93,7 +93,7 @@ DEM terrarium ─────┼──> React ──> MapLibre
 Hidrografía OSM ───┤
 Terraplenes ───────┤
 Tiles PBF ─────────┤
-Cotas binarias ────┘
+Alcanze binario ────┘
 ```
 
 1. La app consulta el INA cada 10 minutos y toma el último valor como nivel en vivo.
@@ -104,7 +104,7 @@ Cotas binarias ────┘
 6. Los terraplenes (313 cotas municipales) se rasterizan como barrera: cada celda toma la altura máxima entre DEM y cota; los tramos sin cota bloquean siempre.
 7. Un BFS conectado al río marca las celdas con altura efectiva ≤ elevación del agua.
 8. `d3-contour` genera el polígono y se simplifica con RDP.
-9. Los edificios se pintan en rojo si `cota ≤ elevación del agua`.
+9. Los edificios se pintan en rojo si su **cota de alcanze** ≤ elevación del agua: la misma regla que el polígono.
 
 Más detalle: [Documentación técnica completa](docs/DOCUMENTACION.md).
 
@@ -115,13 +115,13 @@ Los edificios combinan dos fuentes:
 - **Municipalidad de Santa Fe:** 21.455 edificios del este, con `altura_max` de 2,5 / 5 / 7,5 m.
 - **Overture Maps:** 54.353 edificios del oeste con huellas reales. Se usa `height`; si no existe, `num_floors × 3 m`; si tampoco, 3 m estimados.
 
-La cota de cada edificio se calcula con 9 muestras del DEM alrededor de la huella y una regla de robustez para descartar valores anómalos. Se guarda en los tiles y en un binario ordenado que permite contar afectados por búsqueda binaria.
+La cota de cada edificio se calcula con 9 muestras del DEM alrededor de la huella y una regla de robustez para descartar valores anómalos. Además se hornea su **cota de alcanze** (la elevación a la que la máscara de inundación, con terraplenes, lo alcanza); ambas van en los tiles y el binario de alcanze ordenado permite contar los afectados por búsqueda binaria.
 
 ## Estructura
 
 ```text
 fuentes/terraplenes/        # shapefile original (no se publica)
-scripts/                    # regeneración de terraplenes e historia del Salado
+scripts/                    # terraplenes, alcance, tiles e historia del Salado
 src/
 ├── App.jsx                 # estado, simulación, gráficos
 ├── components/Mapa.jsx     # MapLibre, capas, edificios, popups
@@ -132,7 +132,7 @@ src/
 public/
 ├── data/
 │   ├── agua-permanente.geojson
-│   ├── edificios-cotas.bin
+│   ├── edificios-alcance.bin
 │   └── terraplenes.geojson
 └── tiles/13-15/*.pbf
 docs/
@@ -148,7 +148,7 @@ docs/
 - No modela bombas, compuertas, viento ni lluvia local.
 - El nivel del río Salado es solo de monitoreo: no modula la simulación (otra cuenca y otro cero).
 - La cota es del terreno alrededor de la huella, no de la planta baja.
-- El rojo se asigna por cota, sin verificar conectividad con el polígono de agua.
+- El rojo sale de la cota de alcanze y coincide con el polígono de inundación (salvo el redondeo de 0,01 m horneado).
 - El filtro cota ≤ 18 m asume el cero oficial y el máximo de 8 m. Si se sube mucho la calibración del cero, hay que regenerar los datos.
 - La hidrografía permanente es una referencia visual de Overture/OSM: no cambia con el nivel del río y puede estar desactualizada.
 - El Río Coronda se ve en la capa permanente, pero no está incluido en el modelo de inundación porque queda fuera del DEM.

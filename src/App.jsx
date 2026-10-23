@@ -387,7 +387,7 @@ export default function App() {
           <div
             className="leyenda-edificios"
             aria-live="polite"
-            title="Edificios 3D en zona inundable (cota ≤ 18 m): Municipalidad de Santa Fe (costa) y Overture Maps"
+            title="Edificios alcanzados por el agua simulada (dataset con cota ≤ 18 m): Municipalidad de Santa Fe (costa) y Overture Maps"
           >
             <span className="leyenda-edificios__punto" aria-hidden="true" />
             <span>

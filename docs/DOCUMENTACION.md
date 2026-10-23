@@ -38,7 +38,7 @@ La app combina cuatro cosas:
 1. **Nivel del río en vivo:** consulta la serie 30 del INA (hidrómetro Puerto Santa Fe) y muestra el último valor, la variación diaria y la serie de los últimos 120 días.
 2. **Simulación de crecida:** un slider entre 3,00 m y 8,00 m permite elegir un nivel y calcular qué celdas del terreno quedarían bajo el agua.
 3. **Mapa 2D/3D:** muestra el polígono de agua, la hidrografía permanente, distritos y vecinales, un modelo de elevación con exageración, y edificios extruidos. Hay capas opcionales de **zona de seguridad hídrica** y **terraplenes** (apagadas por defecto).
-4. **Edificios afectados:** los edificios se pintan en rojo cuando su cota de terreno es menor o igual a la elevación del agua simulada. La leyenda muestra cuántos son sobre el total de edificios incluidos en el modelo 3D.
+4. **Edificios afectados:** los edificios se pintan en rojo cuando la **máscara de inundación** (ya con los terraplenes como barrera) los alcanza. La leyenda muestra cuántos son sobre el total de edificios incluidos en el modelo 3D.
 
 También incluye:
 
@@ -67,7 +67,7 @@ No hay backend ni base de datos en línea para la app: es una SPA estática que 
 | Mapa | MapLibre GL JS 5.6 |
 | Contornos de agua | `d3-contour` 4 |
 | Estilos | CSS propio |
-| Datos estáticos | GeoJSON, PNG DEM, PBF vector tiles, binario de cotas |
+| Datos estáticos | GeoJSON, PNG DEM, PBF vector tiles, binario de alcanze |
 | Datos dinámicos | INA, WFS municipal, tiles externos |
 
 ### Flujo general
@@ -77,7 +77,7 @@ INA ───────────────┐
 WFS municipales ───┤
 DEM terrarium ─────┼──> React (App.jsx) ──> MapLibre (Mapa.jsx)
 Tiles PBF ─────────┤         │
-Cotas binarias ────┘         └──> estado, cálculo de inundación, leyenda
+Alcanze binario ────┘         └──> estado, cálculo de inundación, leyenda
 ```
 
 ### Componentes principales
@@ -100,7 +100,7 @@ Cotas binarias ────┘         └──> estado, cálculo de inundació
 | `src/data/historia-santa-fe.json` | Máximas anuales históricas del Paraná |
 | `src/data/historia-salado.json` | Máximas anuales del río Salado (2001–2026) |
 | `public/tiles/` | Vector tiles de edificios z13–z15 |
-| `public/data/edificios-cotas.bin` | Cotas ordenadas para conteo rápido |
+| `public/data/edificios-alcance.bin` | Cota de alcanze ordenada para conteo rápido |
 | `scripts/` | Regeneración de terraplenes e historia del Salado |
 
 ---
@@ -335,7 +335,7 @@ La Prefectura es la fuente primaria de la serie de alturas, pero la app usa la A
    - estación Recreo: WFS del Salado (14 días) y serie larga a5 (120 días);
    - distritos, vecinales y zona de seguridad hídrica;
    - DEM;
-   - binario de cotas de edificios;
+   - binario de alcanze de edificios;
    - geojson de terraplenes.
 4. Cuando llega la serie, se toma el último valor como nivel en vivo.
 5. Si el usuario no tocó el slider, la simulación se inicializa con ese valor.
@@ -361,7 +361,7 @@ Mientras `tocado` sea falso, cada actualización del INA actualiza la simulació
 - Hay un debounce de 90 ms para no recalcular en cada evento del slider.
 - El color y el conteo de edificios se actualizan en cada cambio de nivel, sin recalcular el DEM.
 - La serie del INA y la estación Recreo se actualizan cada 10 minutos.
-- Los tiles y el binario de cotas son estáticos; no se piden a un backend.
+- Los tiles y el binario de alcanze son estáticos; no se piden a un backend.
 
 ### 4.4. URL
 
@@ -465,8 +465,10 @@ Archivo: `src/lib/flood.js`.
    [-60.525, -31.700]
    ```
 
-2. Cada semilla se convierte a celda. Si la celda está por encima del nivel o es muro, se busca la celda mojada más cercana (sin muros) en un radio de hasta 14 celdas (aproximadamente 455 m), eligiendo la más baja.
+2. Cada semilla se convierte a celda y se activa si su altura efectiva ≤ elevación del agua y no es muro.
 3. Si ninguna semilla queda mojada, se usa como semilla la celda más baja de toda la grilla que no sea muro.
+
+Esta regla hace que la máscara sea exactamente el conjunto de celdas con `distancia_minimax ≤ elevación`, que es la misma condición que usa el rojo de los edificios (§6.5).
 4. Se hace un **BFS de 4 vecinos** (arriba, abajo, izquierda, derecha) desde las semillas.
 5. Antes del BFS se rasteriza la **barrera de terraplenes** (`src/lib/terraplenes.js`, un raster por grilla, ~2.400 celdas con cota):
 
@@ -531,7 +533,9 @@ Valores calculados con este DEM, este algoritmo **y los terraplenes como barrera
 | 5,70 m | 14,078 m | ≈ 310,1 km² |
 | 7,43 m | 15,808 m | ≈ 364,4 km² |
 
-Con los terraplenes el área baja entre 4 y 9 km² respecto al modelo sin barreras a partir de la alerta; a nivel normal la diferencia es mínima porque el propio DEM ya muestra la mayoría de las crestes. Son áreas del **modelo**, no superficies oficiales de emergencia.
+Con los terraplenes el área baja entre 4 y 9 km² respecto al modelo sin barreras a partir de la alerta; a nivel normal la diferencia es mínima porque el propio DEM ya muestra la mayoría de las crestes. A nivel mínimo del slider (3,00 m; elevación 11,378 m) el área cae a ≈ 32 km²: solo queda mojado lo conectado al río. Los espejos permanentes (Ensenada, lagunas) los dibuja la capa de hidrografía, no la de inundación.
+
+Son áreas del **modelo**, no superficies oficiales de emergencia.
 
 ---
 
@@ -663,26 +667,42 @@ Cotas del dataset final:
 
 ### 6.5. Color y conteo
 
+El color no usa la cota del terreno sino la **cota de alcanze** (`alc`): la elevación mínima del agua a la que la máscara (BFS + terraplenes) alcanza ese edificio. Se hornea offline con `scripts/alcance_edificios.py`, que:
+
+1. rasteriza los terraplenes igual que el navegador (misma paridad: 2.397 celdas con cota);
+2. corre un **Dijkstra minimax** desde las semillas: `dist[celda] = max(altura_efectiva, dist[vecino])`, con muros sin cota excluidos (validado contra `computeFlood`: **0 discrepancias** en 3,00 / 3,85 / 5,30 / 5,70 / 7,43 m);
+3. por edificio toma el **mínimo de `dist` sobre los mismos 9 puntos de muestreo** de la cota (si el agua toca un borde, el edificio queda alcanzado) y redondea a 2 decimales.
+
 En `Mapa.jsx`, la expresión de color es:
 
 ```js
 [
   'case',
-  ['<=', ['coalesce', ['get', 'cota'], 100000], nivel],
-  '#dc2626', // afectado
-  '#d5e0e8'  // no afectado
+  ['<=', ['coalesce', ['get', 'alc'], 999], nivel],
+  '#dc2626', // alcanzado
+  '#d5e0e8'  // no alcanzado
 ]
 ```
 
-Donde `nivel` es la **elevación del agua** (`nivel INA + cero`).
+Donde `nivel` es la **elevación del agua** (`nivel INA + cero`) y `999` marca “sin alcance” (en la práctica ningún edificio lo usa: el simulador termina en 16,378 m y la cota de alcanze máxima es 20,0 m).
 
-El conteo no recorre las features: se descarga un binario ordenado de cotas y se hace búsqueda binaria del límite superior:
+El conteo no recorre las features: se descarga el binario ordenado de alcanze y se hace búsqueda binaria del límite superior:
 
 ```text
-afectados = cantidad de cotas <= elevación del agua
+afectados = cantidad de alcanze <= elevación del agua
 ```
 
-El binario tiene **75.808 Float32 little-endian**, ordenados de menor a mayor, y ocupa **303.232 bytes**.
+El binario `edificios-alcance.bin` tiene **75.808 Float32 little-endian**, ordenados de menor a mayor, y ocupa **303.232 bytes**.
+
+Conteos por nivel (regla vieja por cota → regla nueva por alcanze):
+
+| Nivel | Elevación | Antes | Ahora |
+|---:|---:|---:|---:|
+| 3,85 / en vivo | 12,228 / 12,258 m | 381 / 394 | **27** |
+| 5,30 (alerta) | 13,678 m | 3.992 | **254** |
+| 5,70 (evacuación) | 14,078 m | 7.321 | **1.992** |
+| 7,43 (récord) | 15,808 m | 28.195 | **9.380** |
+| 8,00 (máximo) | 16,378 m | 38.926 | **17.440** |
 
 ### 6.6. Popup de edificio
 
@@ -690,7 +710,7 @@ Muestra:
 
 - altura (`a`), con la palabra “estimada” si `e = 1`;
 - cota del terreno, con un decimal;
-- “Bajo el agua simulada” o “Fuera del agua simulada”.
+- estado por cota de alcanze: “Bajo el agua simulada”, “Se alcanza con agua desde X,X m de elevación” o “No alcanzado con el rango del simulador”.
 
 No muestra número de floors, ID de Overture ni fecha del dato.
 
@@ -709,6 +729,7 @@ Los tiles se generan offline con DuckDB Spatial y se sirven como archivos estát
 - Recorte: sí (`clip=true`).
 - Capa: `edificios`.
 - ID de feature: columna `id`.
+- Generador: `scripts/build_tiles.py`. Su bbox es el `bboxTiles` de la config, que MapLibre usa como `bounds` de la fuente.
 
 Esquema de propiedades:
 
@@ -718,12 +739,13 @@ Esquema de propiedades:
 | `a` | número | altura en metros |
 | `e` | 0/1 | 0 = altura conocida/derivada; 1 = estimada |
 | `cota` | número | elevación del terreno en metros |
+| `alc` | número | cota de alcanze: elevación a la que la máscara lo alcanza |
 
 La consulta base es:
 
 ```sql
 WITH t AS (
-  SELECT id, a, e, cota,
+  SELECT id, a, e, cota, alc,
     ST_AsMVTGeom(
       ST_Transform(geom, 'EPSG:4326', 'EPSG:3857'),
       ST_MakeBox2D(ST_Point(xm, ym), ST_Point(xM, yM)),
@@ -742,14 +764,14 @@ Detalle técnico: `ST_TileEnvelope` devuelve una geometría, no un `BOX_2D`; por
 
 | Zoom | Tiles | Tamaño |
 |---:|---:|---:|
-| 13 | 30 | 2,6 MB |
-| 14 | 99 | 2,6 MB |
-| 15 | 340 | 2,7 MB |
-| **Total** | **469** | **7,9 MB** |
+| 13 | 30 | 2,7 MB |
+| 14 | 99 | 2,8 MB |
+| 15 | 340 | 2,9 MB |
+| **Total** | **469** | **8,4 MB** |
 
-Tamaño máximo de un tile: **584.325 bytes**.
+Tamaño máximo de un tile: **618.641 bytes**.
 
-En disco, por el tamaño de bloque del sistema de archivos, `du` puede mostrar ~9,2 MB.
+En disco, por el tamaño de bloque del sistema de archivos, `du` puede mostrar ~9,7 MB.
 
 El zoom 12 se descartó: generaba tiles de hasta 4,68 MB y solo 9 tiles sumaban 7,2 MB, sin aportar detalle útil.
 
@@ -762,9 +784,12 @@ La fuente vectorial usa:
   type: 'vector',
   tiles: [publicUrl('tiles/{z}/{x}/{y}.pbf')],
   minzoom: 13,
-  maxzoom: 15
+  maxzoom: 15,
+  bounds: cfg.bboxTiles // [-60.785, -31.7, -60.575, -31.55]
 }
 ```
+
+`bounds` restringe los pedidos al área que realmente tiene tiles (`bboxTiles`, el bbox de generación), más chica que el bbox del DEM: sin eso, al volar fuera de la cobertura MapLibre pide tiles inexistentes y el servidor responde con `index.html`, que el parser MVT rechaza.
 
 `publicUrl()` resuelve correctamente la base cuando la app se publica en un subdirectorio. MapLibre exige URLs absolutas; con `BASE_URL = './'`, concatenar `origin + './tiles'` producía URLs inválidas como `http://host./tiles`. La función usa `new URL(import.meta.env.BASE_URL, window.location.href)`.
 
@@ -783,10 +808,10 @@ Con el dataset final, en producción:
 | Métrica | Valor |
 |---|---:|
 | Tiles cargados al inicio (z13/z14) | 6 + 9 |
-| Leyenda inicial | ~381–394 afectados |
-| Récord | 28.195 afectados |
+| Leyenda inicial | 27 afectados (nivel en vivo, 3,88 m) |
+| Récord | 9.380 afectados |
 | FPS tras asentarse | 61 |
-| Tamaño de tiles | 7,9 MB |
+| Tamaño de tiles | 8,4 MB |
 
 La versión anterior, con 248.197 bounding boxes y 26 MB de tiles, también llegaba a 61 fps una vez asentada, pero tardaba mucho más en cargar y procesar.
 
@@ -1047,7 +1072,9 @@ crecida-santa-fe/
 │   └── terraplenes/        # .shp y .dbf originales (no se publican)
 ├── scripts/
 │   ├── terraplenes_geojson.py
-│   └── historia_salado.py
+│   ├── historia_salado.py
+│   ├── alcance_edificios.py
+│   └── build_tiles.py
 ├── src/
 │   ├── App.jsx
 │   ├── main.jsx
@@ -1073,7 +1100,7 @@ crecida-santa-fe/
 ├── public/
 │   ├── data/
 │   │   ├── agua-permanente.geojson
-│   │   ├── edificios-cotas.bin
+│   │   ├── edificios-alcance.bin
 │   │   └── terraplenes.geojson
 │   └── tiles/
 │       ├── 13/...
@@ -1086,11 +1113,11 @@ Archivos de datos relevantes:
 
 | Archivo | Tamaño | Contenido |
 |---|---:|---|
-| `public/data/edificios-cotas.bin` | 303.232 B | 75.808 cotas Float32 ordenadas |
+| `public/data/edificios-alcance.bin` | 303.232 B | 75.808 cotas de alcanze Float32 ordenadas |
 | `public/data/terraplenes.geojson` | ~12 KB | 12 alineamientos de terraplén con cotas por vértice |
 | `src/data/historia-salado.json` | ~1,6 KB | 26 años de máximas del Salado (2001–2026) |
 | `public/data/agua-permanente.geojson` | ~1,2 MB | Polígono disuelto y 809 líneas de hidrografía permanente |
-| `public/tiles/` | 7,9 MB | 469 tiles MVT |
+| `public/tiles/` | 8,4 MB | 469 tiles MVT |
 | `src/data/historia-santa-fe.json` | 7,7 KB | 102 años de máximas |
 | `dist/` | ~11 MB | build estático completo |
 
@@ -1126,7 +1153,7 @@ El build queda en `dist/`. La app usa `base: './'`, por lo que puede servirse de
 ```text
 dist/index.html
 dist/assets/...
-dist/data/edificios-cotas.bin
+dist/data/edificios-alcance.bin
 dist/tiles/...
 ```
 
@@ -1153,10 +1180,10 @@ El flujo usado fue:
 3. construir la grilla DEM de referencia;
 4. calcular la cota de cada edificio;
 5. filtrar cota ≤ 18 m;
-6. generar `edificios-cotas.bin`;
-7. generar tiles z13–z15 con `ST_AsMVTGeom` + `ST_AsMVT`.
+6. calcular la cota de alcanze y generar `edificios-alcance.bin` (`scripts/alcance_edificios.py`);
+7. generar tiles z13–z15 con `ST_AsMVTGeom` + `ST_AsMVT` (`scripts/build_tiles.py`).
 
-Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Python con NumPy/Shapely, Pillow/requests para el DEM). Si se actualiza Overture o el relevamiento municipal, hay que repetir el proceso y volver a generar los tiles y el binario.
+Los scripts originales de edificios se usaron fuera del repositorio (DuckDB Spatial, Python con NumPy/Shapely, Pillow/requests para el DEM); los de alcance y tiles ahora están en `scripts/`. Si se actualiza Overture o el relevamiento municipal, hay que repetir el proceso y volver a generar el binario y los tiles.
 
 Regeneraciones puntuales, sí incluidas en el repo (solo stdlib de Python + `gdal-bin`):
 
@@ -1166,7 +1193,15 @@ python3 scripts/terraplenes_geojson.py
 
 # serie103 del INA -> src/data/historia-salado.json
 python3 scripts/historia_salado.py
+
+# cota de alcanze -> public/data/edificios-alcance.bin + columna alc (duckdb)
+python3 scripts/alcance_edificios.py
+
+# tiles z13-z15 con alc (borra y reescribe public/tiles)
+python3 scripts/build_tiles.py
 ```
+
+Después de regenerar tiles hay que reiniciar `npm run dev` (o `preview`): Vite mantiene la lista de `public/` por eventos del watcher y, ante un `rmtree`+reescritura masiva, puede quedar desactualizada y servir `index.html` en vez del `.pbf`.
 
 ---
 
@@ -1186,7 +1221,8 @@ python3 scripts/historia_salado.py
 
 ### Edificios
 
-- El rojo se asigna por **cota del terreno ≤ elevación del agua**, sin comprobar que el edificio esté dentro del polígono conectado. Un edificio en una depresión aislada puede quedar rojo aunque el agua del polígono no lo alcance; con los terraplenes como barrera esa discrepancia puede crecer (edificios detrás de un terraplén quedan rojos aunque el agua no los alcance).
+- El rojo usa la **cota de alcanze**, así que coincide con el polígono de inundación; la única diferencia posible es el redondeo de 0,01 m del valor horneado (y la muestra de 9 puntos, un poco más generosa que el centro exacto del edificio).
+- La cota de alcanze se hornea contra la grilla DEM de referencia: si cambia el DEM de los tiles de AWS, hay que regenerar el binario y los tiles para que siga coincidiendo.
 - La cota se muestrea alrededor de la huella, no en la planta baja.
 - El DEM puede incluir techos, árboles o terraplenes.
 - Las alturas municipales son declaradas, no medidas.
@@ -1264,13 +1300,13 @@ Las licencias de Overture, OpenStreetMap, EOX y Mapzen deben respetarse al redis
 
 | Nivel INA | Elevación | Edificios afectados | Área del modelo (con terraplenes) |
 |---:|---:|---:|---:|
-| 3,85 m | 12,228 m | 381 | ≈ 96,6 km² |
-| 5,30 m | 13,678 m | 3.992 | ≈ 249,5 km² |
-| 5,70 m | 14,078 m | 7.321 | ≈ 310,1 km² |
-| 7,43 m | 15,808 m | 28.195 | ≈ 364,4 km² |
-| 8,00 m | 16,378 m | 38.926 | — |
+| 3,85 m | 12,228 m | 27 | ≈ 96,6 km² |
+| 5,30 m | 13,678 m | 254 | ≈ 249,5 km² |
+| 5,70 m | 14,078 m | 1.992 | ≈ 310,1 km² |
+| 7,43 m | 15,808 m | 9.380 | ≈ 364,4 km² |
+| 8,00 m | 16,378 m | 17.440 | — |
 
-Los edificios afectados dependen solo de la cota (no de la conectividad), por lo que no cambian con los terraplenes.
+Los edificios afectados salen de la cota de alcanze: coinciden con la máscara (incluidos los terraplenes). Bajan respecto a la regla anterior por cota porque muchos edificios quedan detrás de un terraplén o fuera de la conectividad con el río.
 
 El nivel en vivo del ejemplo de validación fue 3,88 m, que da **394** edificios afectados.
 
@@ -1279,11 +1315,11 @@ El nivel en vivo del ejemplo de validación fue 3,88 m, que da **394** edificios
 | Concepto | Valor |
 |---|---:|
 | Tiles | 469 |
-| z13 | 30 tiles / 2,6 MB |
-| z14 | 99 tiles / 2,6 MB |
-| z15 | 340 tiles / 2,7 MB |
-| Total | 7,9 MB |
-| Tile máximo | 584.325 B |
+| z13 | 30 tiles / 2,7 MB |
+| z14 | 99 tiles / 2,8 MB |
+| z15 | 340 tiles / 2,9 MB |
+| Total | 8,4 MB |
+| Tile máximo | 618.641 B |
 | Extensión MVT | 4096 |
 | Buffer | 64 |
 
@@ -1316,6 +1352,6 @@ El nivel en vivo del ejemplo de validación fue 3,88 m, que da **394** edificios
 - Sin errores de consola ni de red propios.
 - 2D y 3D verificados.
 - Popup de edificio y de zonas verificado.
-- Conteo 394 al nivel en vivo y 28.195 en el récord.
+- Conteo 27 al nivel en vivo y 9.380 en el récord (regla por cota de alcanze).
 - 61 fps tras asentarse.
 - Tiles con huellas reales: promedio ~6,3 puntos por feature en las muestras verificadas.

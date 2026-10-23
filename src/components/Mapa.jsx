@@ -51,7 +51,7 @@ export default function Mapa({
     if (!m || !m.getLayer('edificios-3d')) return;
     m.setPaintProperty('edificios-3d', 'fill-extrusion-color', [
       'case',
-      ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current ?? 0],
+      ['<=', ['coalesce', ['get', 'alc'], 999], nivelRef.current ?? 0],
       COLOR_AFECTADO,
       COLOR_EDIFICIO,
     ]);
@@ -60,7 +60,7 @@ export default function Mapa({
   useEffect(() => {
     let cancelado = false;
     fetch(
-      publicUrl('data/edificios-cotas.bin'),
+      publicUrl('data/edificios-alcance.bin'),
     )
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -343,7 +343,7 @@ export default function Mapa({
         tiles: [publicUrl('tiles/{z}/{x}/{y}.pbf')],
         minzoom: 13,
         maxzoom: 15,
-        bounds: cfg.bbox,
+        bounds: cfg.bboxTiles ?? cfg.bbox,
         attribution: 'Edificios 3D (cota ≤ 18 m): Municipalidad de Santa Fe y Overture Maps',
       });
       m.addLayer(
@@ -357,7 +357,7 @@ export default function Mapa({
           paint: {
             'fill-extrusion-color': [
               'case',
-              ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current ?? 0],
+              ['<=', ['coalesce', ['get', 'alc'], 999], nivelRef.current ?? 0],
               COLOR_AFECTADO,
               COLOR_EDIFICIO,
             ],
@@ -472,13 +472,18 @@ export default function Mapa({
             `Altura${estimada ? ' estimada' : ''}: ${altura.toLocaleString('es-AR')} m`,
           );
         }
+        const alc = Number(f.properties?.alc);
         if (Number.isFinite(cota) && cota < 100000) {
           filas.push(`Cota del terreno: ${cota.toFixed(1).replace('.', ',')} m`);
-          filas.push(
-            cota <= nivelRef.current
-              ? 'Bajo el agua simulada'
-              : 'Fuera del agua simulada',
-          );
+          if (Number.isFinite(alc) && alc < 900) {
+            filas.push(
+              alc <= nivelRef.current
+                ? 'Bajo el agua simulada'
+                : `Se alcanza con agua desde ${alc.toFixed(1).replace('.', ',')} m de elevación`,
+            );
+          } else {
+            filas.push('No alcanzado con el rango del simulador');
+          }
         } else {
           filas.push('Cota sin calcular');
         }

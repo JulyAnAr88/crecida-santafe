@@ -8,6 +8,9 @@ export const LOCALIDAD = {
   centro3d: [-60.7002319185745, -31.6514772196376],
   zoom3d: 14.2,
   bbox: [-60.79, -31.735, -60.5, -31.55],
+  // cobertura de public/tiles (scripts/build_tiles.py): más chica que el bbox
+  // del DEM; la fuente vectorial la usa como `bounds` para no pedir tiles que no existen
+  bboxTiles: [-60.785, -31.7, -60.575, -31.55],
   demZoom: 13,
   demDecimate: 2,
   demToleranciaGrados: 0.00009,
