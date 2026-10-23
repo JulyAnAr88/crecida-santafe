@@ -4,39 +4,52 @@ import SerieChart from './components/SerieChart.jsx';
 import AnualesChart from './components/AnualesChart.jsx';
 import { LOCALIDAD } from './config/santaFe.js';
 import historia from './data/historia-santa-fe.json';
+import historiaSalado from './data/historia-salado.json';
 import { loadDem } from './lib/dem.js';
 import { computeFlood } from './lib/flood.js';
-import { fetchEstacion, fetchSerie } from './lib/ina.js';
+import { fetchEstacion, fetchSerie, fetchSalado } from './lib/ina.js';
 import { fetchZona } from './lib/zonas.js';
+import { publicUrl } from './lib/publicUrl.js';
+import { rasterizarTerraplenes } from './lib/terraplenes.js';
 import { fmtM, fmtKm2, fmtFecha, fmtFechaHora, fechaDesdeISO } from './lib/format.js';
 
 const cfg = LOCALIDAD;
 
 function estadoDe(v, umbrales) {
-  if (v >= umbrales.evacuacion) return { txt: 'Evacuación', cls: 'evac' };
-  if (v >= umbrales.alerta) return { txt: 'Alerta', cls: 'alerta' };
+  if (Number.isFinite(umbrales.evacuacion) && umbrales.evacuacion > 0 && v >= umbrales.evacuacion)
+    return { txt: 'Evacuación', cls: 'evac' };
+  if (Number.isFinite(umbrales.alerta) && umbrales.alerta > 0 && v >= umbrales.alerta)
+    return { txt: 'Alerta', cls: 'alerta' };
   return { txt: 'Normal', cls: 'ok' };
 }
 
 function Gauge({ nivel, live, umbrales }) {
   const MAX = 8;
   const pct = (v) => Math.min(100, Math.max(0, (v / MAX) * 100));
+  const conAlerta = Number.isFinite(umbrales.alerta) && umbrales.alerta > 0;
+  const conEvac = Number.isFinite(umbrales.evacuacion) && umbrales.evacuacion > 0;
+  const pctAlerta = conAlerta ? pct(umbrales.alerta) : 0;
+  const pctEvac = conEvac ? pct(umbrales.evacuacion) : 100;
   return (
     <div className="gauge">
       <div className="gauge-riel">
-        <div className="gauge-zona normal" style={{ width: `${pct(umbrales.alerta)}%` }} />
-        <div
-          className="gauge-zona alerta"
-          style={{ left: `${pct(umbrales.alerta)}%`, width: `${pct(umbrales.evacuacion) - pct(umbrales.alerta)}%` }}
-        />
-        <div className="gauge-zona evac" style={{ left: `${pct(umbrales.evacuacion)}%`, right: 0 }} />
+        <div className="gauge-zona normal" style={{ width: `${conAlerta ? pctAlerta : 100}%` }} />
+        {conAlerta && (
+          <div
+            className="gauge-zona alerta"
+            style={{ left: `${pctAlerta}%`, width: `${pctEvac - pctAlerta}%` }}
+          />
+        )}
+        {conEvac && (
+          <div className="gauge-zona evac" style={{ left: `${pctEvac}%`, right: 0 }} />
+        )}
         {live != null && <div className="gauge-live" style={{ left: `${pct(live)}%` }} />}
-        <div className="gauge-marca" style={{ left: `${pct(nivel)}%` }} />
+        {nivel != null && <div className="gauge-marca" style={{ left: `${pct(nivel)}%` }} />}
       </div>
       <div className="gauge-ticks">
         <span style={{ left: '0%' }}>0</span>
-        <span style={{ left: `${pct(umbrales.alerta)}%` }}>{fmtM(umbrales.alerta, 1)}</span>
-        <span style={{ left: `${pct(umbrales.evacuacion)}%` }}>{fmtM(umbrales.evacuacion, 1)}</span>
+        {conAlerta && <span style={{ left: `${pctAlerta}%` }}>{fmtM(umbrales.alerta, 1)}</span>}
+        {conEvac && <span style={{ left: `${pctEvac}%` }}>{fmtM(umbrales.evacuacion, 1)}</span>}
         <span className="der" style={{ left: '100%' }}>8 m</span>
       </div>
     </div>
@@ -62,7 +75,17 @@ export default function App() {
   const [edificios, setEdificios] = useState(null);
   const [zonas, setZonas] = useState(null);
   const [zonasError, setZonasError] = useState(null);
-  const [capas, setCapas] = useState({ distritos: true, vecinales: false });
+  const [capas, setCapas] = useState({
+    distritos: true,
+    vecinales: false,
+    seguridad: false,
+    terraplenes: false,
+  });
+  const [salado, setSalado] = useState(null);
+  const [saladoError, setSaladoError] = useState(null);
+  const [terrapGeo, setTerrapGeo] = useState(null);
+  const [barreras, setBarreras] = useState(null);
+  const [foco, setFoco] = useState(null);
 
   const umbrales = useMemo(
     () => ({
@@ -71,6 +94,15 @@ export default function App() {
       evacuacion: estacion?.estacion?.nivel_evacuacion ?? cfg.umbrales.evacuacion,
     }),
     [estacion],
+  );
+
+  const umbralesSalado = useMemo(
+    () => ({
+      aguasBajas: salado?.umbrales.aguasBajas ?? null,
+      alerta: salado?.umbrales.alerta ?? cfg.salado.umbrales.alerta,
+      evacuacion: salado?.umbrales.evacuacion ?? null,
+    }),
+    [salado],
   );
 
   useEffect(() => {
@@ -111,17 +143,61 @@ export default function App() {
   }, [live, tocado]);
 
   useEffect(() => {
+    let alive = true;
+    async function cargarSalado() {
+      try {
+        const s = await fetchSalado(120);
+        if (alive) {
+          setSalado(s);
+          setSaladoError(null);
+        }
+      } catch {
+        if (alive) setSaladoError('No pudimos consultar el río Salado en INA.');
+      }
+    }
+    cargarSalado();
+    const id = setInterval(cargarSalado, 10 * 60 * 1000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(publicUrl(cfg.capas.terraplenes))
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((g) => {
+        if (alive) setTerrapGeo(g);
+      })
+      .catch(() => {
+        // Sin terraplenes el modelo sigue funcionando, sin las barreras.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const ctrl = new AbortController();
     Promise.all([
       fetchZona(cfg.capas.distritos, ctrl.signal),
       fetchZona(cfg.capas.vecinales, ctrl.signal),
     ])
       .then(([distritos, vecinales]) => {
-        setZonas({ distritos, vecinales });
+        setZonas((prev) => ({ ...(prev || {}), distritos, vecinales }));
         setZonasError(null);
       })
       .catch((e) => {
         if (e.name !== 'AbortError') setZonasError('No se pudieron cargar distritos y vecinales.');
+      });
+    fetchZona(cfg.capas.seguridad, ctrl.signal)
+      .then((seguridad) => setZonas((prev) => ({ ...(prev || {}), seguridad })))
+      .catch(() => {
+        // Capa opcional: si falla, la app sigue sin ella.
       });
     return () => ctrl.abort();
   }, []);
@@ -158,6 +234,15 @@ export default function App() {
   useEffect(() => cargarDem(), [cargarDem]);
 
   useEffect(() => {
+    if (!dem || !terrapGeo) return;
+    try {
+      setBarreras(rasterizarTerraplenes(terrapGeo, dem));
+    } catch {
+      setBarreras(null);
+    }
+  }, [dem, terrapGeo]);
+
+  useEffect(() => {
     if (!dem || sim == null) return;
     let cancelled = false;
     const id = setTimeout(() => {
@@ -166,6 +251,7 @@ export default function App() {
         sim + cero,
         cfg.semillasRio,
         cfg.demToleranciaGrados,
+        barreras,
       );
       if (!cancelled) setFlood(res);
     }, 90);
@@ -173,7 +259,7 @@ export default function App() {
       cancelled = true;
       clearTimeout(id);
     };
-  }, [dem, sim, cero]);
+  }, [dem, sim, cero, barreras]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -184,6 +270,7 @@ export default function App() {
 
   const mostrado = sim ?? live?.valor ?? cfg.simulador.inicial_m;
   const estado = estadoDe(mostrado, umbrales);
+  const estadoSalado = salado ? estadoDe(salado.valor, umbralesSalado) : null;
 
   const setNivel = (v) => {
     const clamped = Math.min(cfg.simulador.max_m, Math.max(cfg.simulador.min_m, v));
@@ -207,6 +294,18 @@ export default function App() {
   const anioActual = new Date().getFullYear();
   const record = top[0];
 
+  const aniosSalado = useMemo(
+    () =>
+      historiaSalado.anios
+        .filter((a) => a[1] != null)
+        .map((a) => ({ anio: a[0], max: a[1], fecha: a[2] })),
+    [],
+  );
+  const topSalado = useMemo(
+    () => [...aniosSalado].sort((a, b) => b.max - a.max).slice(0, 6),
+    [aniosSalado],
+  );
+
   const pMin = cfg.simulador.min_m;
   const pMax = cfg.simulador.max_m;
   const pctAlerta = ((umbrales.alerta - pMin) / (pMax - pMin)) * 100;
@@ -222,6 +321,8 @@ export default function App() {
         satelite={satelite}
         zonas={zonas}
         capas={capas}
+        terraplenes={terrapGeo}
+        foco={foco}
         nivel={mostrado + cero}
         onEdificios={setEdificios}
       />
@@ -262,6 +363,24 @@ export default function App() {
             title={zonasError || 'Vecinales'}
           >
             Vecinales
+          </button>
+          <button
+            type="button"
+            className={capas.seguridad ? 'on' : ''}
+            aria-pressed={capas.seguridad}
+            onClick={() => setCapas((c) => ({ ...c, seguridad: !c.seguridad }))}
+            title={zonasError || 'Zona de seguridad hídrica (Municipalidad)'}
+          >
+            Seg. hídrica
+          </button>
+          <button
+            type="button"
+            className={capas.terraplenes ? 'on' : ''}
+            aria-pressed={capas.terraplenes}
+            onClick={() => setCapas((c) => ({ ...c, terraplenes: !c.terraplenes }))}
+            title="Terraplenes con cotas levantadas (Municipalidad, 2020)"
+          >
+            Terraplenes
           </button>
         </div>
         {vista3d && (
@@ -461,11 +580,95 @@ export default function App() {
           </div>
         </section>
 
+        <section className="card nivel-card nivel-salado">
+          <div className="eyebrow">
+            Nivel del río · {cfg.salado.rio} — {cfg.salado.nombre}
+          </div>
+          <div className="nivel-linea">
+            <span className="nivel-valor">{salado ? fmtM(salado.valor) : '—'}</span>
+            <span className="nivel-unidad">m</span>
+            {estadoSalado && <span className={`chip ${estadoSalado.cls}`}>{estadoSalado.txt}</span>}
+          </div>
+          <div className="nivel-sub">
+            {saladoError ? (
+              <span className="error">{saladoError}</span>
+            ) : salado ? (
+              <>
+                {salado.delta != null && (
+                  <span className={salado.delta >= 0 ? 'sube' : 'baja'}>
+                    {salado.delta >= 0 ? '▲' : '▼'} {fmtM(Math.abs(salado.delta))} m vs. lectura
+                    anterior
+                  </span>
+                )}
+                <span className="sep">·</span>
+                <span>{salado.fuente}</span>
+              </>
+            ) : (
+              'Consultando el nivel…'
+            )}
+          </div>
+          <Gauge
+            nivel={salado?.valor ?? null}
+            live={salado?.valor ?? null}
+            umbrales={umbralesSalado}
+          />
+          <div className="nivel-pie">
+            <span>Último dato: {salado?.fecha ? fmtFechaHora(salado.fecha) : '—'}</span>
+            <span className="sep">·</span>
+            <span>Serie INA n.º {cfg.salado.serieId}</span>
+            <span className="sep">·</span>
+            <span>cero IGN {fmtM(cfg.salado.ceroIgn, 2)} m</span>
+            <button
+              type="button"
+              className="link"
+              onClick={() => setFoco({ n: Date.now(), pos: cfg.salado.posicion })}
+            >
+              Ver en el mapa
+            </button>
+          </div>
+        </section>
+
+        <section className="card">
+          <div className="card-cabecera">
+            <h2>Nivel reciente · Río Salado</h2>
+            <span className="sub">INA · diario</span>
+          </div>
+          <SerieChart serie={salado?.serie ?? []} umbrales={umbralesSalado} />
+        </section>
+
+        <section className="card">
+          <div className="card-cabecera">
+            <h2>Máximas anuales · Río Salado</h2>
+            <span className="sub">
+              {aniosSalado.length
+                ? `${aniosSalado[0].anio}–${aniosSalado[aniosSalado.length - 1].anio} · Recreo`
+                : 'Recreo'}
+            </span>
+          </div>
+          <AnualesChart
+            anios={aniosSalado}
+            umbrales={umbralesSalado}
+            lo={2}
+            hi={8}
+            anioActual={anioActual}
+          />
+          <div className="historicas">
+            {topSalado.map((a) => (
+              <div className="hist-row static" key={a.anio}>
+                <span className="hist-anio">{a.anio}</span>
+                <span className="hist-fecha">{fmtFecha(fechaDesdeISO(a.fecha))}</span>
+                <span className="hist-altura">{fmtM(a.max)} m</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="card pie-card">
           <p>
             <strong>Estimación, no pronóstico oficial.</strong> El mapa inunda el terreno del
-            DEM (~30 m) hasta el nivel elegido: no modela defensas, terraplenes ni lluvia local.
-            Tocá el gráfico o las crecidas para simular.
+            DEM (~30 m) hasta el nivel elegido: los terraplenes actúan como barrera con su cota
+            levantada y no se modelan bombas, compuertas ni lluvia local. Tocá el gráfico o las
+            crecidas para simular.
           </p>
           <p className="fuentes">
             {cfg.fuentes.map((f, i) => (

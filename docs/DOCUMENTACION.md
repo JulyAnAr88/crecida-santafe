@@ -4,8 +4,9 @@ Aplicación web para consultar el nivel del río Paraná en Santa Fe, simular cr
 
 [← Volver al README](../README.md)
 
-> **Corte de esta documentación:** 22/10/2026.
+> **Corte de esta documentación:** 23/10/2026.
 > **Datos de edificios:** Overture Maps release `2026-10-21.0` y relevamiento municipal con imagen de 03/2022.
+> **Terraplenes:** Municipalidad de Santa Fe, levantamiento de cotas del 10/02/2020 (12 sectores, 313 puntos).
 > **Serie histórica:** INA–SIyAH, actualizada al 01/09/2026.
 > **Advertencia:** es una estimación geométrica, no un pronóstico ni un estudio hidráulico oficial.
 
@@ -36,7 +37,7 @@ La app combina cuatro cosas:
 
 1. **Nivel del río en vivo:** consulta la serie 30 del INA (hidrómetro Puerto Santa Fe) y muestra el último valor, la variación diaria y la serie de los últimos 120 días.
 2. **Simulación de crecida:** un slider entre 3,00 m y 8,00 m permite elegir un nivel y calcular qué celdas del terreno quedarían bajo el agua.
-3. **Mapa 2D/3D:** muestra el polígono de agua, distritos y vecinales, un modelo de elevación con exageración, y edificios extruidos.
+3. **Mapa 2D/3D:** muestra el polígono de agua, la hidrografía permanente, distritos y vecinales, un modelo de elevación con exageración, y edificios extruidos. Hay capas opcionales de **zona de seguridad hídrica** y **terraplenes** (apagadas por defecto).
 4. **Edificios afectados:** los edificios se pintan en rojo cuando su cota de terreno es menor o igual a la elevación del agua simulada. La leyenda muestra cuántos son sobre el total de edificios incluidos en el modelo 3D.
 
 También incluye:
@@ -44,10 +45,12 @@ También incluye:
 - gauge con umbrales de aguas bajas, alerta y evacuación;
 - gráfico de la serie reciente;
 - gráfico de máximas anuales 1925–2026;
+- tarjeta del **río Salado** (estación Recreo): nivel en vivo, estado, serie de 120 días y máximas anuales 2001–2026;
 - botones rápidos para alerta, evacuación y récord histórico;
 - calibración manual de la cota del cero del hidrómetro;
 - capas de distritos y vecinales;
-- popups de zonas y de edificios.
+- capas de zona de seguridad hídrica y terraplenes (apagadas por defecto);
+- popups de zonas, terraplenes y de edificios.
 
 No hay backend ni base de datos en línea para la app: es una SPA estática que consume APIs públicas y archivos estáticos.
 
@@ -89,12 +92,16 @@ Cotas binarias ────┘         └──> estado, cálculo de inundació
 | `src/lib/dem.js` | Descarga y procesamiento del DEM |
 | `src/lib/flood.js` | BFS, contorno, simplificación y área inundada |
 | `src/lib/ina.js` | Cliente de la API del INA |
-| `src/lib/zonas.js` | Cliente WFS de distritos y vecinales |
+| `src/lib/zonas.js` | Cliente WFS de distritos, vecinales y zona de seguridad hídrica |
+| `src/lib/terraplenes.js` | Rasteriza los alineamientos de terraplenes como barrera del BFS |
+| `src/lib/publicUrl.js` | URLs relativas para funcionar en subdirectorios |
 | `src/lib/geo.js` | Conversiones Web Mercator / tile / píxel |
 | `src/lib/format.js` | Formateo de números y fechas en es-AR |
-| `src/data/historia-santa-fe.json` | Máximas anuales históricas |
+| `src/data/historia-santa-fe.json` | Máximas anuales históricas del Paraná |
+| `src/data/historia-salado.json` | Máximas anuales del río Salado (2001–2026) |
 | `public/tiles/` | Vector tiles de edificios z13–z15 |
 | `public/data/edificios-cotas.bin` | Cotas ordenadas para conteo rápido |
+| `scripts/` | Regeneración de terraplenes e historia del Salado |
 
 ---
 
@@ -125,7 +132,21 @@ Cada **10 minutos** se repite la consulta. El último valor se usa como “nivel
 
 La serie que devuelve INA es diaria para esta estación. El gráfico “Nivel reciente” muestra los últimos 120 días.
 
-### 3.2. Serie histórica
+### 3.2. Nivel del río Salado: estación Recreo
+
+| Dato | Valor |
+|---|---|
+| Río / estación | Río Salado — “Recreo - Ruta Provincial nº 70” |
+| Serie / unid | 103 |
+| Posición | `[-60.78055556, -31.49122222]` |
+| Cero IGN | 11,09 m |
+| Alerta | 4,7 m |
+| Evacuación / aguas bajas | no publicadas (0 en WFS y `null` en a5 ⇒ se ignoran) |
+| Fuentes | API a5 serie 103 (serie larga) + WFS `public2:ultimas_alturas_con_timeseries` (valor actual y 14 días) |
+
+Se piden en paralelo y se combinan (ver §9.5): el valor mostrado sale del WFS, que está más actualizado que a5; la serie de 120 días se arma mezclando las dos fuentes. Refresco cada 10 minutos. La tarjeta **no modula la simulación** del Paraná: es otra cuenca con otro cero.
+
+### 3.3. Serie histórica
 
 Archivo local: `src/data/historia-santa-fe.json`.
 
@@ -159,7 +180,7 @@ El máximo histórico registrado es **7,43 m el 22/06/1992**. Los seis máximos 
 
 El archivo se importa en el bundle; no se consulta en tiempo de ejecución.
 
-### 3.3. Edificios municipales
+### 3.4. Edificios municipales
 
 Fuente: Geoservicios de la Municipalidad de Santa Fe.
 
@@ -184,7 +205,7 @@ Alturas municipales:
 
 Se usa `altura_max`. `altura_min` no se usa para el modelo 3D.
 
-### 3.4. Edificios de Overture Maps
+### 3.5. Edificios de Overture Maps
 
 Fuente: Overture Maps Foundation, release **`2026-10-21.0`**.
 
@@ -217,7 +238,7 @@ Las huellas de Overture son geometrías reales, no bounding boxes. En el recorte
 
 Muchas son rectángulos simples, pero representan la forma real del edificio.
 
-### 3.5. Distritos y vecinales
+### 3.6. Distritos, vecinales y zona de seguridad hídrica
 
 Fuente: WFS municipal.
 
@@ -228,9 +249,11 @@ Fuente: WFS municipal.
 
 Se consultan al iniciar la app con WFS 2.0.0, `outputFormat=application/json`, `srsName=EPSG:4326` y `count=1000`.
 
+La **zona de seguridad hídrica** se pide por el mismo WFS (`publico:zona_seguridad_hidrica`, 19 polígonos, DefaultSRS `EPSG:22185`, reproyectados a `EPSG:4326`). Se carga en paralelo y en forma independiente: si falla, distritos y vecinales siguen disponibles.
+
 Las etiquetas se calculan en el cliente: se toma el anillo principal de cada polígono (el de mayor área) y se calcula su centroide con la fórmula del área firmada. El popup usa `nombre` y `numero`.
 
-### 3.6. DEM y mapas de base
+### 3.7. DEM y mapas de base
 
 | Dato | Fuente |
 |---|---|
@@ -247,7 +270,49 @@ https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}
 https://tiles.openfreemap.org/styles/positron
 ```
 
-### 3.7. Fuentes oficiales enlazadas
+### 3.8. Hidrografía permanente
+
+La app incluye una capa de agua permanente independiente del DEM y del nivel del río. Se usa para que el Paraná, la Laguna Setúbal y el Río Coronda se vean aunque el área esté fuera del modelo de inundación o el DEM no represente bien el espejo de agua.
+
+| Dato | Valor |
+|---|---|
+| Fuente | Overture Maps, `theme=base`, `type=water`, release `2026-10-21.0` |
+| Archivo | `public/data/agua-permanente.geojson` |
+| Cobertura | `[-61.10, -32.30, -60.30, -31.30]` |
+| Features | 810 (1 polígono disuelto + 809 líneas) |
+| Tamaño | ~1,2 MB |
+| Simplificación | `ST_Union_Agg` y luego `ST_SimplifyPreserveTopology` a 0,00012° |
+| Clases incluidas | `river`, `lake`, `lagoon`, `reservoir`, `water`, `canal`, `pond`, `basin`, `tidal_channel` |
+
+Los polígonos se disuelven con `ST_Union_Agg` antes de simplificar para eliminar las costuras internas entre teselas. La capa se dibuja debajo de la inundación simulada. No implica que el agua esté cubriendo esa superficie: es una referencia visual de hidrografía. El modelo de crecida sigue dependiendo del DEM y del BFS.
+
+### 3.9. Terraplenes
+
+Fuente: levantamiento municipal de cotas (10/02/2020), entregado como shapefile.
+
+- Crudos en `fuentes/terraplenes/10022020_Cotas_Terraplenes.{shp,dbf}` (no se publican: Vite solo empaqueta `public/`).
+- `scripts/terraplenes_geojson.py` los convierte a `public/data/terraplenes.geojson` (`EPSG:22185 → EPSG:4326` con `gdaltransform`).
+- Son **313 puntos PointZ** con `Elevation` (0–24,4 m) agrupados en 12 sectores y **desordenados** dentro de cada sector: el script reconstruye el alineamiento con cadena de vecino más cercano (4 candidatos a extremo, se elige la cadena con el salto máximo menor; salto mediano ≈ 230 m).
+- Salida: 12 `LineString` con `properties.z` (cota por vértice; `0` = sin dato) y `cota_min` / `cota_max` / `cota_med` por sector.
+
+| Sector | Pts | Cotas (m) |
+|---|---:|---|
+| Circunvalación Oeste | 65 | 15,76–24,40 |
+| Alto Verde (9-10-11) | 56 | 12,28–18,46 |
+| Zona portuaria | 37 | 15,93–16,86 |
+| Costanera Oeste | 33 | 16,10–17,94 |
+| Avenida Mar Argentino | 20 | 15,90–20,62 |
+| Terraplén French | 18 | 16,48–17,14 |
+| El Pozo | 18 | 16,70–19,92 |
+| Colastine Sur | 17 | 15,27–17,92 |
+| Ceride | 15 | 16,69–17,73 |
+| Varadero Sarsotti | 12 | 15,41–17,05 |
+| Bajada Distefano | 11 | 16,83–17,99 |
+| La Guardia | 11 | 17,32–17,83 |
+
+La misma geometría alimenta la **barrera del BFS** (§5.4) y la **capa visual** del mapa (§8.3).
+
+### 3.10. Fuentes oficiales enlazadas
 
 La app enlaza, sin consumirlas directamente:
 
@@ -267,15 +332,18 @@ La Prefectura es la fuente primaria de la serie de alturas, pero la app usa la A
 2. Se crea el mapa MapLibre.
 3. Se consultan en paralelo:
    - metadatos y serie de 120 días del INA;
-   - distritos y vecinales;
+   - estación Recreo: WFS del Salado (14 días) y serie larga a5 (120 días);
+   - distritos, vecinales y zona de seguridad hídrica;
    - DEM;
-   - binario de cotas de edificios.
+   - binario de cotas de edificios;
+   - geojson de terraplenes.
 4. Cuando llega la serie, se toma el último valor como nivel en vivo.
 5. Si el usuario no tocó el slider, la simulación se inicializa con ese valor.
-6. Cuando el DEM está listo y hay un nivel, se calcula el polígono de inundación.
-7. Cuando el mapa está listo y hay nivel, se actualiza el color de los edificios.
+6. Cuando el DEM está listo, se rasterizan los terraplenes como barrera.
+7. Cuando el DEM, las barreras y un nivel están listos, se calcula el polígono de inundación.
+8. Cuando el mapa está listo y hay nivel, se actualiza el color de los edificios.
 
-Si INA falla, el mapa y el simulador siguen funcionando con el nivel inicial de 3,85 m y se muestra un mensaje de error.
+Si INA falla, el mapa y el simulador siguen funcionando con el nivel inicial de 3,85 m y se muestra un mensaje de error. Si falla la consulta del Salado se intenta la otra fuente (WFS o a5) y, en última instancia, se muestra el error en la tarjeta.
 
 ### 4.2. Estado de simulación
 
@@ -289,10 +357,10 @@ Mientras `tocado` sea falso, cada actualización del INA actualiza la simulació
 ### 4.3. Cálculo y actualización
 
 - El DEM se carga una vez.
-- El polígono de agua se recalcula cuando cambian `dem`, `sim` o `cero`.
+- El polígono de agua se recalcula cuando cambian `dem`, `sim`, `cero` o las `barreras` de terraplenes.
 - Hay un debounce de 90 ms para no recalcular en cada evento del slider.
 - El color y el conteo de edificios se actualizan en cada cambio de nivel, sin recalcular el DEM.
-- La serie del INA se actualiza cada 10 minutos.
+- La serie del INA y la estación Recreo se actualizan cada 10 minutos.
 - Los tiles y el binario de cotas son estáticos; no se piden a un backend.
 
 ### 4.4. URL
@@ -397,22 +465,29 @@ Archivo: `src/lib/flood.js`.
    [-60.525, -31.700]
    ```
 
-2. Cada semilla se convierte a celda. Si la celda está por encima del nivel, se busca la celda mojada más cercana en un radio de hasta 14 celdas (aproximadamente 455 m), eligiendo la más baja.
-3. Si ninguna semilla queda mojada, se usa como semilla la celda más baja de toda la grilla.
+2. Cada semilla se convierte a celda. Si la celda está por encima del nivel o es muro, se busca la celda mojada más cercana (sin muros) en un radio de hasta 14 celdas (aproximadamente 455 m), eligiendo la más baja.
+3. Si ninguna semilla queda mojada, se usa como semilla la celda más baja de toda la grilla que no sea muro.
 4. Se hace un **BFS de 4 vecinos** (arriba, abajo, izquierda, derecha) desde las semillas.
-5. Una celda se inunda si:
+5. Antes del BFS se rasteriza la **barrera de terraplenes** (`src/lib/terraplenes.js`, un raster por grilla, ~2.400 celdas con cota):
+
+   - cada alineamiento se muestrea cada 0,34 celda y las celdas se encadenan con camino 4-conectado (sin escaleras diagonales por las que el BFS se escaparía);
+   - cada celda de terraplén toma `altura_efectiva = max(altura_DEM, cota_terraplén)` (la cota levantada manda cuando el DEM de 30 m promedia la cresta);
+   - los tramos sin cota (los5 puntos con `Elevation = 0`) quedan como **muro absoluto**: no se inundan nunca;
+   - si una celda tiene cota y muro, manda la cota (puede ser sobrepasada).
+
+6. Una celda se inunda si:
 
    ```text
-   altura_DEM(celda) <= elevación_del_agua
+   altura_efectiva(celda) <= elevación_del_agua
    ```
 
-   y además es alcanzable desde el río.
+   no es muro absoluto, y además es alcanzable desde el río.
 
-6. Se genera un campo binario `1` para celdas inundadas y `0` para el resto.
-7. Se extraen los contornos con `d3-contour` en el umbral 0,5.
-8. Cada anillo se convierte de coordenadas de grilla a longitud/latitud.
-9. Se simplifica con Ramer–Douglas–Peucker con tolerancia de 0,00009° (unos 10 m en latitud y 8,5 m en longitud).
-10. Se calcula el área sumando, por fila, la cantidad de celdas mojadas por el área de celda correspondiente a esa latitud:
+7. Se genera un campo binario `1` para celdas inundadas y `0` para el resto.
+8. Se extraen los contornos con `d3-contour` en el umbral 0,5.
+9. Cada anillo se convierte de coordenadas de grilla a longitud/latitud.
+10. Se simplifica con Ramer–Douglas–Peucker con tolerancia de 0,00009° (unos 10 m en latitud y 8,5 m en longitud).
+11. Se calcula el área sumando, por fila, la cantidad de celdas mojadas por el área de celda correspondiente a esa latitud:
 
     ```text
     área = Σ (celdas_mojadas_fila × mpp(lat)²)
@@ -432,26 +507,31 @@ El resultado incluye:
 
 ### 5.5. Visualización del agua
 
-El GeoJSON se carga en la fuente `agua` de MapLibre:
+Hay dos capas de agua:
 
-- relleno `#2b9fe0` con opacidad 0,5;
-- borde `#9fe0ff` de 1 px;
-- se dibuja sobre el terreno con `fill` normal, por lo que **sigue la topografía** y no forma una superficie plana horizontal.
+1. **Hidrografía permanente** (`agua-base`): se carga desde `public/data/agua-permanente.geojson` y se dibuja primero, debajo de distritos, vecinales y de la inundación.
+   - relleno `#1b6f95` con opacidad 0,55;
+   - borde `rgba(125,211,252,0.45)`;
+   - líneas `#7dd3fc` de 0,8 px para ríos y arroyos.
+2. **Inundación simulada** (`agua`): es el GeoJSON que sale del BFS y `d3-contour`.
+   - relleno `#2b9fe0` con opacidad 0,5;
+   - borde `#9fe0ff` de 1 px;
+   - se dibuja sobre el terreno con `fill` normal, por lo que **sigue la topografía** y no forma una superficie plana horizontal.
 
-Las capas de edificios se dibujan por encima del agua.
+Las capas de edificios se dibujan por encima de ambas. La hidrografía permanente no se recalcula cuando cambia el nivel: solo la capa `agua` responde al slider.
 
 ### 5.6. Áreas de referencia
 
-Valores calculados con este DEM y este algoritmo:
+Valores calculados con este DEM, este algoritmo **y los terraplenes como barrera**:
 
 | Nivel INA | Elevación | Área estimada |
 |---:|---:|---:|
-| 3,85 m | 12,228 m | 95,8 km² |
-| 5,30 m | 13,678 m | 240,9 km² |
-| 5,70 m | 14,078 m | 306,0 km² |
-| 7,43 m | 15,808 m | 366,4 km² |
+| 3,85 m | 12,228 m | ≈ 96,6 km² |
+| 5,30 m | 13,678 m | ≈ 249,5 km² |
+| 5,70 m | 14,078 m | ≈ 310,1 km² |
+| 7,43 m | 15,808 m | ≈ 364,4 km² |
 
-Son áreas del **modelo**, no superficies oficiales de emergencia.
+Con los terraplenes el área baja entre 4 y 9 km² respecto al modelo sin barreras a partir de la alerta; a nivel normal la diferencia es mínima porque el propio DEM ya muestra la mayoría de las crestes. Son áreas del **modelo**, no superficies oficiales de emergencia.
 
 ---
 
@@ -748,8 +828,11 @@ La exageración 2,2 afecta al terreno. Las extrusiones de edificios mantienen su
 
 - Distritos: relleno celeste muy transparente, borde discontinuo, etiqueta y popup.
 - Vecinales: relleno violeta muy transparente, borde fino, etiqueta a partir de zoom 12,8 y popup.
-- Se pueden activar/desactivar por separado.
+- Zona de seguridad hídrica: 19 polígonos del WFS `publico:zona_seguridad_hidrica`, relleno naranja tenue y borde discontinuo; popup con el id. Apagada por defecto. Se carga en paralelo e independiente: si falla, distritos y vecinales siguen disponibles.
+- Terraplenes: `public/data/terraplenes.geojson` (12 alineamientos), línea ámbar con contorno marrón, dibujada **encima** del agua simulada; popup con sector, cota mín/máx/media y cantidad de puntos. Apagado por defecto. La misma geometría es la barrera del BFS.
+- Se pueden activar/desactivar por separado (Distritos, Vecinales, Seg. hídrica, Terraplenes).
 - Si el WFS falla, el mapa sigue funcionando y se muestra el error en el `title` de los botones.
+- Orden de dibujo: relieve → hidrografía permanente → distritos/vecinales → seguridad hídrica → inundación → terraplenes → etiquetas → edificios.
 
 ### 8.4. Marcador e hidrómetro
 
@@ -760,6 +843,14 @@ Hay un marcador en:
 ```
 
 Etiquetado “Hidrómetro / Puerto Santa Fe”. La cámara 3D se centra ahí.
+
+Hay un segundo marcador en:
+
+```text
+[-60.78055556, -31.49122222]
+```
+
+Etiquetado “Recreo / Río Salado” (punto verde). Queda unos 7 km al norte de la vista inicial: el botón “Ver en el mapa” de la tarjeta del Salado vuela hasta ahí (zoom ≈ 13,4).
 
 ### 8.5. Gauge y umbrales
 
@@ -821,6 +912,16 @@ Sirve para corregir el desfase entre el DEM y la cota IGN. **No** cambia los dat
 | Binario de cotas falla | Leyenda “Edificios no disponibles”; el mapa sigue |
 | Tiles no cargan | No se ven edificios; el resto del mapa sigue |
 
+### 8.10. Tarjeta Río Salado
+
+Tres tarjetas después de las del Paraná:
+
+- **Nivel del río · Río Salado — Estación Recreo:** valor en metros, chip de estado (Normal/Alerta según4,7 m), variación contra la lectura anterior, gauge 0–8 m (zona de alerta desde4,7 m; como la evacuación no está publicada no se dibuja zona roja), pie con último dato, serie n.º 103, cero IGN 11,09 m y el link “Ver en el mapa”.
+- **Nivel reciente · Río Salado:** `SerieChart` con120 días.
+- **Máximas anuales · Río Salado:** `AnualesChart` con escala parametrizada2–8 m (el récord de 2003, 7,89 m, se sale de la escala por defecto del Paraná) y filas **no clicables**: el nivel del Salado no modula la simulación del Paraná.
+
+Los umbrales faltantes se normalizan a `null` y `estadoDe`, `Gauge` y `AnualesChart` los ignoran (sin zona roja ni línea de evacuación fantasma).
+
 ---
 
 ## 9. Endpoints y parámetros
@@ -865,7 +966,7 @@ Zonas:
 &count=1000
 ```
 
-Igual para `publico:vecinal`.
+Igual para `publico:vecinal` y para `publico:zona_seguridad_hidrica` (DefaultSRS `EPSG:22185`, reproyectado con `srsName=EPSG:4326`).
 
 Edificios:
 
@@ -907,6 +1008,32 @@ https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}
 https://tiles.openfreemap.org/styles/positron
 ```
 
+### 9.5. Estación Recreo (río Salado)
+
+Serie/unid **103**. Se consultan en paralelo dos fuentes y se combinan:
+
+API a5 (serie larga, la misma que usa el Puerto):
+
+```text
+https://alerta.ina.gob.ar/a5/obs/puntual/series/103
+https://alerta.ina.gob.ar/a5/obs/puntual/observaciones?series_id=103&timestart=…&timeend=…&format=json
+```
+
+WFS con timeseries (valor actual, umbrales y últimos 14 días; CORS `*`):
+
+```text
+https://alerta.ina.gob.ar/geoserver/public2/ows
+  ?service=WFS
+  &version=1.0.0
+  &request=GetFeature
+  &typeName=public2:ultimas_alturas_con_timeseries
+  &viewParams=timeStart:AAAA-MM-DD;timeEnd:AAAA-MM-DD
+  &CQL_FILTER=unid=103
+  &outputFormat=application/json
+```
+
+El WFS con ventana de 120 días tarda ~20–60 s, por eso solo se le pide 14 días (≈2 s) y la serie larga viene de a5; ambas se mezclan desuplicando por hora. Timeout del WFS: 15 s. Fallbacks: si el WFS falla se usa solo a5; si a5 falla, solo WFS.
+
 ---
 
 ## 10. Estructura de archivos
@@ -916,6 +1043,11 @@ crecida-santa-fe/
 ├── index.html
 ├── package.json
 ├── vite.config.js
+├── fuentes/
+│   └── terraplenes/        # .shp y .dbf originales (no se publican)
+├── scripts/
+│   ├── terraplenes_geojson.py
+│   └── historia_salado.py
 ├── src/
 │   ├── App.jsx
 │   ├── main.jsx
@@ -927,17 +1059,22 @@ crecida-santa-fe/
 │   ├── config/
 │   │   └── santaFe.js
 │   ├── data/
-│   │   └── historia-santa-fe.json
+│   │   ├── historia-santa-fe.json
+│   │   └── historia-salado.json
 │   └── lib/
 │       ├── dem.js
 │       ├── flood.js
 │       ├── format.js
 │       ├── geo.js
 │       ├── ina.js
+│       ├── publicUrl.js
+│       ├── terraplenes.js
 │       └── zonas.js
 ├── public/
 │   ├── data/
-│   │   └── edificios-cotas.bin
+│   │   ├── agua-permanente.geojson
+│   │   ├── edificios-cotas.bin
+│   │   └── terraplenes.geojson
 │   └── tiles/
 │       ├── 13/...
 │       ├── 14/...
@@ -950,6 +1087,9 @@ Archivos de datos relevantes:
 | Archivo | Tamaño | Contenido |
 |---|---:|---|
 | `public/data/edificios-cotas.bin` | 303.232 B | 75.808 cotas Float32 ordenadas |
+| `public/data/terraplenes.geojson` | ~12 KB | 12 alineamientos de terraplén con cotas por vértice |
+| `src/data/historia-salado.json` | ~1,6 KB | 26 años de máximas del Salado (2001–2026) |
+| `public/data/agua-permanente.geojson` | ~1,2 MB | Polígono disuelto y 809 líneas de hidrografía permanente |
 | `public/tiles/` | 7,9 MB | 469 tiles MVT |
 | `src/data/historia-santa-fe.json` | 7,7 KB | 102 años de máximas |
 | `dist/` | ~11 MB | build estático completo |
@@ -1018,6 +1158,16 @@ El flujo usado fue:
 
 Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Python con NumPy/Shapely, Pillow/requests para el DEM). Si se actualiza Overture o el relevamiento municipal, hay que repetir el proceso y volver a generar los tiles y el binario.
 
+Regeneraciones puntuales, sí incluidas en el repo (solo stdlib de Python + `gdal-bin`):
+
+```bash
+# fuentes/terraplenes/*.shp -> public/data/terraplenes.geojson
+python3 scripts/terraplenes_geojson.py
+
+# serie103 del INA -> src/data/historia-salado.json
+python3 scripts/historia_salado.py
+```
+
 ---
 
 ## 12. Limitaciones y advertencias
@@ -1026,7 +1176,9 @@ Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Pyth
 
 - Es un modelo geométrico de tipo “bañera con conectividad”, no un modelo hidráulico.
 - No simula velocidad, caudal, duración, oleaje, viento ni lluvia local.
-- No modela defensas, terraplenes, bombas, compuertas ni obras de protección.
+- Los terraplenes **sí** actúan como barrera (cota levantada sobre el DEM), pero solo donde el levantamiento tiene puntos: los huecos entre sectores, las zonas fuera de la bbox y los tramos sin cota levantada no frenan el agua (los pocos tramos sin cota quedan como muro absoluto).
+- Las cotas de los terraplenes están en metros IGN y se comparan con `nivel + cero`; un desfase de datum afecta igual que la calibración del cero.
+- No se modelan bombas, compuertas, defensas activas ni obras de protección.
 - El agua se conecta al río por BFS de 4 vecinos; una depresión baja aislada no se inunda si no es alcanzable.
 - El polígono de agua se drapa sobre el terreno; no es una superficie plana.
 - El DEM tiene ~30 m de resolución y errores de décimas de metro o más.
@@ -1034,7 +1186,7 @@ Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Pyth
 
 ### Edificios
 
-- El rojo se asigna por **cota del terreno ≤ elevación del agua**, sin comprobar que el edificio esté dentro del polígono conectado. Un edificio en una depresión aislada puede quedar rojo aunque el agua del polígono no lo alcance.
+- El rojo se asigna por **cota del terreno ≤ elevación del agua**, sin comprobar que el edificio esté dentro del polígono conectado. Un edificio en una depresión aislada puede quedar rojo aunque el agua del polígono no lo alcance; con los terraplenes como barrera esa discrepancia puede crecer (edificios detrás de un terraplén quedan rojos aunque el agua no los alcance).
 - La cota se muestrea alrededor de la huella, no en la planta baja.
 - El DEM puede incluir techos, árboles o terraplenes.
 - Las alturas municipales son declaradas, no medidas.
@@ -1046,11 +1198,14 @@ Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Pyth
 
 ### Datos y actualización
 
-- Los tiles y las cotas son una foto estática: no se actualizan solos.
+- Los tiles, las cotas, la hidrografía y los terraplenes son una foto estática: no se actualizan solos.
 - INA se actualiza cada 10 minutos; el resto no.
-- La serie histórica tiene 2026 incompleto al corte.
+- La serie histórica del Paraná tiene 2026 incompleto al corte; la del Salado es un snapshot generado (`historia-salado.json`), de2001 en adelante.
+- La API a5 de la serie103 llega rezagada respecto al WFS del INA (por eso el valor en vivo sale del WFS con ventana corta).
 - El WFS municipal y el INA pueden fallar o cambiar sin aviso.
 - Overture y OpenStreetMap tienen sus propias licencias y atribuciones.
+- La hidrografía permanente es una referencia de Overture/OSM; no se actualiza con el nivel ni con el DEM.
+- El Río Coronda se ve en la hidrografía permanente, pero no está incluido en el modelo de inundación porque queda fuera del bbox del DEM.
 - La app no reemplaza información oficial de Defensa Civil, INA, Prefectura o Municipalidad.
 
 ### Visualización
@@ -1059,6 +1214,7 @@ Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Pyth
 - El satélite y el DEM son fuentes externas; pueden tener desalineaciones.
 - Los tiles se cortan en z15; a zoom mayor se escalan.
 - La vista 3D prioriza el área del hidrómetro y la franja inundable; no muestra los edificios de cota > 18 m.
+- La hidrografía permanente cubre un bbox más amplio que el DEM; fuera de ese recorte no hay agua base dibujada.
 
 ---
 
@@ -1067,9 +1223,13 @@ Los scripts de generación se usaron fuera del repositorio (DuckDB Spatial, Pyth
 | Fuente | Crédito |
 |---|---|
 | Nivel del río | INA–SIyAH, serie 30; datos primarios de Prefectura Naval Argentina |
+| Río Salado (Recreo) | INA–SIyAH, serie 103; datos primarios de Prefectura Naval Argentina |
 | Edificios municipales | Municipalidad de Santa Fe, Geoservicios |
 | Distritos y vecinales | Municipalidad de Santa Fe, Geoservicios |
+| Zona de seguridad hídrica | Municipalidad de Santa Fe, Geoservicios |
+| Terraplenes | Municipalidad de Santa Fe, levantamiento de cotas 10/02/2020 |
 | Edificios del oeste | Overture Maps Foundation |
+| Hidrografía permanente | Overture Maps Foundation / OpenStreetMap contributors |
 | Relieve | Mapzen Terrain Tiles / AWS Open Data; SRTM y otras fuentes |
 | Satélite | Sentinel-2 cloudless © EOX IT Services GmbH; contiene datos modificados de Copernicus Sentinel-2 |
 | Calles | OpenFreeMap, © OpenMapTiles, © OpenStreetMap contributors |
@@ -1102,13 +1262,15 @@ Las licencias de Overture, OpenStreetMap, EOX y Mapzen deben respetarse al redis
 
 ### Inundación y edificios afectados
 
-| Nivel INA | Elevación | Edificios afectados | Área del modelo |
+| Nivel INA | Elevación | Edificios afectados | Área del modelo (con terraplenes) |
 |---:|---:|---:|---:|
-| 3,85 m | 12,228 m | 381 | 95,8 km² |
-| 5,30 m | 13,678 m | 3.992 | 240,9 km² |
-| 5,70 m | 14,078 m | 7.321 | 306,0 km² |
-| 7,43 m | 15,808 m | 28.195 | 366,4 km² |
+| 3,85 m | 12,228 m | 381 | ≈ 96,6 km² |
+| 5,30 m | 13,678 m | 3.992 | ≈ 249,5 km² |
+| 5,70 m | 14,078 m | 7.321 | ≈ 310,1 km² |
+| 7,43 m | 15,808 m | 28.195 | ≈ 364,4 km² |
 | 8,00 m | 16,378 m | 38.926 | — |
+
+Los edificios afectados dependen solo de la cota (no de la conectividad), por lo que no cambian con los terraplenes.
 
 El nivel en vivo del ejemplo de validación fue 3,88 m, que da **394** edificios afectados.
 

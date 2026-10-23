@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { publicUrl } from '../lib/publicUrl.js';
 
 const SATELLITE =
   'https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg';
 const DEM_TILES =
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const STYLE = 'https://tiles.openfreemap.org/styles/positron';
-
-const publicUrl = (ruta) => {
-  const base = new URL(import.meta.env.BASE_URL, window.location.href);
-  return `${base.href.replace(/\/?$/, '/')}${ruta}`;
-};
 
 const COLOR_EDIFICIO = '#d5e0e8';
 const COLOR_AFECTADO = '#dc2626';
@@ -23,6 +19,8 @@ export default function Mapa({
   satelite,
   zonas,
   capas,
+  terraplenes,
+  foco,
   nivel,
   onEdificios,
 }) {
@@ -42,7 +40,7 @@ export default function Mapa({
     if (arr) {
       let lo = 0;
       let hi = arr.length;
-      const n = nivelRef.current;
+      const n = nivelRef.current ?? 0;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
         if (arr[mid] <= n) lo = mid + 1;
@@ -53,7 +51,7 @@ export default function Mapa({
     if (!m || !m.getLayer('edificios-3d')) return;
     m.setPaintProperty('edificios-3d', 'fill-extrusion-color', [
       'case',
-      ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current],
+      ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current ?? 0],
       COLOR_AFECTADO,
       COLOR_EDIFICIO,
     ]);
@@ -138,16 +136,54 @@ export default function Mapa({
         layout: { visibility: 'none' },
       });
 
-      for (const tipo of ['distritos', 'vecinales']) {
+      m.addSource('agua-base', {
+        type: 'geojson',
+        data: publicUrl('data/agua-permanente.geojson'),
+        attribution: 'Hidrografía: Overture Maps · OpenStreetMap',
+      });
+      m.addLayer({
+        id: 'agua-base-fill',
+        type: 'fill',
+        source: 'agua-base',
+        paint: {
+          'fill-color': '#1b6f95',
+          'fill-opacity': 0.55,
+        },
+      });
+      m.addLayer({
+        id: 'agua-base-line',
+        type: 'line',
+        source: 'agua-base',
+        filter: ['==', '$type', 'LineString'],
+        layout: {
+          'line-join': 'round',
+          'line-cap': 'round',
+        },
+        paint: {
+          'line-color': '#7dd3fc',
+          'line-width': 0.8,
+          'line-opacity': 0.5,
+        },
+      });
+
+      for (const tipo of ['distritos', 'vecinales', 'seguridad', 'terraplenes']) {
+        const atribucion =
+          tipo === 'terraplenes'
+            ? 'Terraplenes: Municipalidad de Santa Fe (levantamiento 2020)'
+            : tipo === 'seguridad'
+              ? 'Zona de seguridad hídrica: Municipalidad de Santa Fe'
+              : 'Distritos y vecinales: Municipalidad de Santa Fe';
         m.addSource(tipo, {
           type: 'geojson',
           data: { type: 'FeatureCollection', features: [] },
-          attribution: 'Distritos y vecinales: Municipalidad de Santa Fe',
+          attribution: atribucion,
         });
-        m.addSource(`${tipo}-etiquetas`, {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] },
-        });
+        if (tipo === 'distritos' || tipo === 'vecinales') {
+          m.addSource(`${tipo}-etiquetas`, {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+          });
+        }
       }
 
       m.addLayer({
@@ -188,6 +224,29 @@ export default function Mapa({
         layout: { visibility: 'none' },
       });
 
+      m.addLayer({
+        id: 'seguridad-fill',
+        type: 'fill',
+        source: 'seguridad',
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-color': '#f97316',
+          'fill-opacity': 0.1,
+        },
+      });
+      m.addLayer({
+        id: 'seguridad-line',
+        type: 'line',
+        source: 'seguridad',
+        layout: { visibility: 'none' },
+        paint: {
+          'line-color': '#fb923c',
+          'line-width': 1.2,
+          'line-opacity': 0.85,
+          'line-dasharray': [4, 3],
+        },
+      });
+
       m.addSource('agua', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -209,6 +268,37 @@ export default function Mapa({
           'line-color': '#9fe0ff',
           'line-width': 1,
           'line-opacity': 0.8,
+        },
+      });
+
+      m.addLayer({
+        id: 'terraplenes-borde',
+        type: 'line',
+        source: 'terraplenes',
+        layout: {
+          visibility: 'none',
+          'line-join': 'round',
+          'line-cap': 'round',
+        },
+        paint: {
+          'line-color': '#451a03',
+          'line-width': 5,
+          'line-opacity': 0.85,
+        },
+      });
+      m.addLayer({
+        id: 'terraplenes-linea',
+        type: 'line',
+        source: 'terraplenes',
+        layout: {
+          visibility: 'none',
+          'line-join': 'round',
+          'line-cap': 'round',
+        },
+        paint: {
+          'line-color': '#f59e0b',
+          'line-width': 2.4,
+          'line-opacity': 1,
         },
       });
 
@@ -253,6 +343,7 @@ export default function Mapa({
         tiles: [publicUrl('tiles/{z}/{x}/{y}.pbf')],
         minzoom: 13,
         maxzoom: 15,
+        bounds: cfg.bbox,
         attribution: 'Edificios 3D (cota ≤ 18 m): Municipalidad de Santa Fe y Overture Maps',
       });
       m.addLayer(
@@ -266,7 +357,7 @@ export default function Mapa({
           paint: {
             'fill-extrusion-color': [
               'case',
-              ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current],
+              ['<=', ['coalesce', ['get', 'cota'], 100000], nivelRef.current ?? 0],
               COLOR_AFECTADO,
               COLOR_EDIFICIO,
             ],
@@ -298,7 +389,11 @@ export default function Mapa({
         cab.className = 'popup-zona__tipo';
         cab.textContent = numero ? `${tipo} n.º ${numero}` : tipo;
         const nom = document.createElement('strong');
-        nom.textContent = props.nombre ?? 'Sin nombre';
+        nom.className = 'popup-zona__nombre';
+        nom.textContent =
+          props.nombre ??
+          props.zona_seguridad_hidrica ??
+          (props.id != null ? `n.º ${props.id}` : 'Sin nombre');
         el.append(cab, nom);
         popup.setLngLat(e.lngLat).setDOMContent(el).addTo(m);
       };
@@ -306,11 +401,50 @@ export default function Mapa({
       for (const [capa, tipo] of [
         ['distrito-fill', 'Distrito municipal'],
         ['vecinal-fill', 'Vecinal'],
+        ['seguridad-fill', 'Zona de seguridad hídrica'],
       ]) {
         m.on('click', capa, (e) => {
           const numero = e.features?.[0]?.properties?.numero;
           abrirPopup(e, tipo, numero);
         });
+        m.on('mouseenter', capa, () => {
+          m.getCanvas().style.cursor = 'pointer';
+        });
+        m.on('mouseleave', capa, () => {
+          m.getCanvas().style.cursor = '';
+        });
+      }
+
+      const popupTerraplen = (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        const p = f.properties ?? {};
+        const fmt1 = (v) => Number(v).toFixed(1).replace('.', ',');
+        const el = document.createElement('div');
+        el.className = 'popup-zona';
+        const cab = document.createElement('div');
+        cab.className = 'popup-zona__tipo';
+        cab.textContent = 'Terraplén';
+        const nom = document.createElement('strong');
+        nom.className = 'popup-zona__nombre';
+        nom.textContent = p.nombre ?? p.sector ?? '—';
+        const det = document.createElement('div');
+        det.className = 'popup-edificio';
+        const filas = [];
+        if (Number(p.cota_min) > 0) {
+          filas.push(
+            `Cota: ${fmt1(p.cota_min)}–${fmt1(p.cota_max)} m (media ${fmt1(p.cota_med)})`,
+          );
+        } else {
+          filas.push('Cota sin dato');
+        }
+        filas.push(`Puntos de levantamiento: ${p.n_puntos ?? '—'}`);
+        det.innerHTML = filas.map((t) => `<span>${t}</span>`).join('');
+        el.append(cab, nom, det);
+        popup.setLngLat(e.lngLat).setDOMContent(el).addTo(m);
+      };
+      for (const capa of ['terraplenes-linea', 'terraplenes-borde']) {
+        m.on('click', capa, popupTerraplen);
         m.on('mouseenter', capa, () => {
           m.getCanvas().style.cursor = 'pointer';
         });
@@ -374,6 +508,19 @@ export default function Mapa({
         .setLngLat(cfg.hidrometro.posicion)
         .addTo(m);
 
+      const elSalado = document.createElement('div');
+      elSalado.className = 'marcador-estacion';
+      elSalado.innerHTML =
+        '<span class="marcador-estacion__punto"></span>' +
+        '<span class="marcador-estacion__etiqueta">Recreo<br><strong>Río Salado</strong></span>';
+      new maplibregl.Marker({
+        element: elSalado,
+        anchor: 'left',
+        offset: [12, 0],
+      })
+        .setLngLat(cfg.salado.posicion)
+        .addTo(m);
+
       setReady(true);
     });
 
@@ -423,7 +570,7 @@ export default function Mapa({
   useEffect(() => {
     const m = map.current;
     if (!ready || !m || !zonas) return;
-    for (const tipo of ['distritos', 'vecinales']) {
+    for (const tipo of ['distritos', 'vecinales', 'seguridad']) {
       const datos = zonas[tipo];
       if (!datos) continue;
       m.getSource(tipo)?.setData(datos.geojson);
@@ -433,16 +580,32 @@ export default function Mapa({
 
   useEffect(() => {
     const m = map.current;
+    if (!ready || !m || !terraplenes) return;
+    m.getSource('terraplenes')?.setData(terraplenes);
+  }, [terraplenes, ready]);
+
+  useEffect(() => {
+    const m = map.current;
     if (!ready || !m || !capas) return;
-    for (const tipo of ['distritos', 'vecinales']) {
+    const visibilidad = {
+      distritos: ['distrito-fill', 'distrito-line', 'distrito-label'],
+      vecinales: ['vecinal-fill', 'vecinal-line', 'vecinal-label'],
+      seguridad: ['seguridad-fill', 'seguridad-line'],
+      terraplenes: ['terraplenes-borde', 'terraplenes-linea'],
+    };
+    for (const [tipo, ids] of Object.entries(visibilidad)) {
       const vis = capas[tipo] ? 'visible' : 'none';
-      const nombre = tipo === 'distritos' ? 'distrito' : 'vecinal';
-      for (const sufijo of ['fill', 'line', 'label']) {
-        const id = `${nombre}-${sufijo}`;
+      for (const id of ids) {
         if (m.getLayer(id)) m.setLayoutProperty(id, 'visibility', vis);
       }
     }
   }, [capas, ready]);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!ready || !m || !foco) return;
+    m.flyTo({ center: foco.pos, zoom: Math.max(m.getZoom(), 13.4), duration: 1600 });
+  }, [foco, ready]);
 
   useEffect(() => {
     refrescar();

@@ -76,6 +76,9 @@ input {
 
 .seg {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  justify-content: flex-end;
   padding: 3px;
   border: 1px solid var(--panel-border);
   border-radius: 999px;
@@ -705,6 +708,24 @@ input {
   color: inherit;
 }
 
+.hist-row.static {
+  cursor: default;
+}
+
+.hist-row.static:hover {
+  color: var(--text);
+}
+
+.hist-row.static:hover .hist-altura {
+  color: #bfe8fb;
+}
+
+/* ---------- Tarjeta Río Salado ---------- */
+
+.nivel-salado {
+  border-top: 2px solid rgba(52, 211, 153, 0.4);
+}
+
 /* ---------- Pie ---------- */
 
 .pie-card {
@@ -828,18 +849,33 @@ input {
   font-size: 12px;
 }
 
-.popup-zona strong {
+.popup-zona strong,
+.popup-zona__nombre {
+  display: block;
   font-size: 13px;
   font-weight: 650;
   line-height: 1.25;
 }
 
 .popup-zona__tipo {
+  display: block;
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.6px;
   text-transform: uppercase;
   color: #9fd8f5;
+}
+
+.popup-edificio {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.popup-edificio span,
+.popup-edificio strong {
+  display: block;
 }
 
 /* ---------- Marcador ---------- */
@@ -874,6 +910,39 @@ input {
 }
 
 .marcador-hidrometro__etiqueta strong {
+  font-weight: 650;
+}
+
+.marcador-estacion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.marcador-estacion__punto {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 2px solid #04121c;
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.22),
+    0 0 18px rgba(52, 211, 153, 0.85);
+}
+
+.marcador-estacion__etiqueta {
+  padding: 5px 8px;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  border-radius: 9px;
+  background: rgba(6, 16, 23, 0.8);
+  color: #dff7ee;
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
+
+.marcador-estacion__etiqueta strong {
   font-weight: 650;
 }
 

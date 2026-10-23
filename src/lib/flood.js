@@ -1,6 +1,6 @@
 import { contours } from 'd3-contour';
 
-function nearestWet(heights, width, height, x0, y0, lim, maxRadius = 14) {
+function nearestWet(width, height, x0, y0, lim, alturaDe, bloqueado, maxRadius = 14) {
   for (let r = 1; r <= maxRadius; r++) {
     let best = -1;
     let bestH = Infinity;
@@ -11,9 +11,10 @@ function nearestWet(heights, width, height, x0, y0, lim, maxRadius = 14) {
         const y = y0 + dy;
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
         const i = y * width + x;
-        if (heights[i] <= lim && heights[i] < bestH) {
+        const h = alturaDe(i);
+        if (h <= lim && h < bestH && !bloqueado(i)) {
           best = i;
-          bestH = heights[i];
+          bestH = h;
         }
       }
     }
@@ -63,15 +64,27 @@ function simplifyRing(points, tol) {
   return simplified;
 }
 
-export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009) {
+export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009, terraplenes = null) {
   const { heights, width, height } = dem;
+  const n = width * height;
+  const cotaT = terraplenes?.cota?.length === n ? terraplenes.cota : null;
+  const muroT = terraplenes?.muro?.length === n ? terraplenes.muro : null;
+
+  // Altura efectiva: el terraplén eleva la celda por sobre el DEM (30 m
+  // promedia la cresta); la cota del levantamiento manda si es mayor.
+  const alturaDe = (i) =>
+    cotaT && cotaT[i] > 0 && cotaT[i] > heights[i] ? cotaT[i] : heights[i];
+  // Terraplén sin cota conocida: barrera absoluta.
+  const bloqueado = (i) =>
+    !!(muroT && muroT[i] === 1 && !(cotaT && cotaT[i] > 0));
+
   const mask = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
   let head = 0;
   let tail = 0;
 
   const visit = (i) => {
-    if (!mask[i] && heights[i] <= waterLevel) {
+    if (!mask[i] && !bloqueado(i) && alturaDe(i) <= waterLevel) {
       mask[i] = 1;
       queue[tail++] = i;
     }
@@ -81,8 +94,8 @@ export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009) {
     const [sx, sy] = dem.lonLatToGrid(lon, lat);
     if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
     let i = sy * width + sx;
-    if (heights[i] > waterLevel) {
-      i = nearestWet(heights, width, height, sx, sy, waterLevel);
+    if (bloqueado(i) || alturaDe(i) > waterLevel) {
+      i = nearestWet(width, height, sx, sy, waterLevel, alturaDe, bloqueado);
     }
     if (i >= 0 && !mask[i]) {
       mask[i] = 1;
@@ -91,11 +104,17 @@ export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009) {
   }
 
   if (tail === 0) {
-    let best = 0;
-    for (let i = 1; i < heights.length; i++) {
-      if (heights[i] < heights[best]) best = i;
+    let best = -1;
+    let bestH = Infinity;
+    for (let i = 0; i < heights.length; i++) {
+      if (bloqueado(i)) continue;
+      const h = alturaDe(i);
+      if (h < bestH) {
+        bestH = h;
+        best = i;
+      }
     }
-    if (heights[best] <= waterLevel) {
+    if (best >= 0 && bestH <= waterLevel) {
       mask[best] = 1;
       queue[tail++] = best;
     }
@@ -155,5 +174,6 @@ export function computeFlood(dem, waterLevel, seeds, tolerance = 0.00009) {
     areaKm2: areaM2 / 1e6,
     floodedCells,
     waterLevel,
+    conTerraplenes: !!terraplenes,
   };
 }

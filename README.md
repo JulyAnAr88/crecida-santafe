@@ -2,7 +2,7 @@
 
 **Nivel del río Paraná en vivo, simulación de crecidas y edificios 3D.**
 
-Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe, permite simular una crecida entre 3 y 8 metros y muestra el agua y los edificios afectados sobre un mapa 2D/3D.
+Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe y el río Salado (estación Recreo), permite simular una crecida entre 3 y 8 metros y muestra la hidrografía permanente, la mancha de inundación y los edificios afectados sobre un mapa 2D/3D.
 
 ![Vista 3D de Crecida Santa Fe con el nivel del récord de 1992](docs/captura.png)
 
@@ -11,7 +11,10 @@ Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe
 ## Qué permite
 
 - Ver el **nivel del río en vivo** desde la serie 30 del INA.
+- Ver el **río Salado** (estación Recreo, serie 103): nivel, estado, serie y máximas anuales.
 - Simular niveles con un slider y botones rápidos: alerta, evacuación y récord.
+- Visualizar la **hidrografía permanente** del Paraná, la Laguna Setúbal y el Río Coronda.
+- Activar **terraplenes** y **zona de seguridad hídrica**; los terraplenes además actúan como barrera dentro del modelo.
 - Visualizar el **polígono de inundación** calculado sobre un DEM.
 - Ver **distritos y vecinales** municipales.
 - Explorar la ciudad en **3D** con terreno, satélite y edificios extruidos.
@@ -27,6 +30,10 @@ Aplicación web estática para Santa Fe: consulta el hidrómetro Puerto Santa Fe
 | Edificios afectados en el récord de 1992 (7,43 m) | 28.195 |
 | Edificios afectados al máximo de 8,00 m | 38.926 |
 | Tiles vectoriales | 469 (7,9 MB) |
+| Hidrografía permanente | 810 features (1,2 MB) |
+| Río Salado · Recreo | serie 103, alerta 4,70 m |
+| Máximas anuales del Salado | 2001–2026 (récord 7,89 m) |
+| Terraplenes | 12 alineamientos, 313 cotas (12,3–24,4 m) |
 | Resolución del DEM | ~32,5 m |
 | Serie histórica | 1925–2026 |
 
@@ -73,6 +80,7 @@ El build queda en `dist/`. La app usa `base: './'`, así que puede publicarse en
 
 ```text
 dist/data/edificios-cotas.bin
+dist/data/agua-permanente.geojson
 dist/tiles/
 ```
 
@@ -82,6 +90,8 @@ dist/tiles/
 INA ───────────────┐
 WFS municipales ───┤
 DEM terrarium ─────┼──> React ──> MapLibre
+Hidrografía OSM ───┤
+Terraplenes ───────┤
 Tiles PBF ─────────┤
 Cotas binarias ────┘
 ```
@@ -90,9 +100,11 @@ Cotas binarias ────┘
 2. El usuario puede simular un nivel entre 3,00 y 8,00 m.
 3. La elevación del agua se calcula como `nivel INA + 8,378 m` (cero del hidrómetro).
 4. El DEM se descarga en z13, se decima a ~32,5 m y se suaviza con mediana 3×3.
-5. Un BFS conectado al río marca las celdas con altura ≤ elevación del agua.
-6. `d3-contour` genera el polígono y se simplifica con RDP.
-7. Los edificios se pintan en rojo si `cota ≤ elevación del agua`.
+5. La hidrografía permanente de Overture/OSM se dibuja debajo de la inundación, incluso fuera del área del DEM.
+6. Los terraplenes (313 cotas municipales) se rasterizan como barrera: cada celda toma la altura máxima entre DEM y cota; los tramos sin cota bloquean siempre.
+7. Un BFS conectado al río marca las celdas con altura efectiva ≤ elevación del agua.
+8. `d3-contour` genera el polígono y se simplifica con RDP.
+9. Los edificios se pintan en rojo si `cota ≤ elevación del agua`.
 
 Más detalle: [Documentación técnica completa](docs/DOCUMENTACION.md).
 
@@ -108,15 +120,20 @@ La cota de cada edificio se calcula con 9 muestras del DEM alrededor de la huell
 ## Estructura
 
 ```text
+fuentes/terraplenes/        # shapefile original (no se publica)
+scripts/                    # regeneración de terraplenes e historia del Salado
 src/
 ├── App.jsx                 # estado, simulación, gráficos
 ├── components/Mapa.jsx     # MapLibre, capas, edificios, popups
 ├── components/*Chart.jsx   # series y máximas anuales
-├── config/santaFe.js       # bbox, umbrales, semillas
-├── data/                   # serie histórica
-└── lib/                    # DEM, flood, INA, zonas
+├── config/santaFe.js       # bbox, umbrales, semillas, estación Recreo
+├── data/                   # series históricas (Paraná y Salado)
+└── lib/                    # DEM, flood, INA, zonas, terraplenes
 public/
-├── data/edificios-cotas.bin
+├── data/
+│   ├── agua-permanente.geojson
+│   ├── edificios-cotas.bin
+│   └── terraplenes.geojson
 └── tiles/13-15/*.pbf
 docs/
 ├── DOCUMENTACION.md
@@ -127,17 +144,23 @@ docs/
 
 - Modelo geométrico: no es un estudio hidráulico ni un pronóstico oficial.
 - DEM de ~30 m; puede incluir techos, árboles o terraplenes.
-- No modela defensas, bombas, compuertas, viento ni lluvia local.
+- Los terraplenes actúan como barrera con su cota levantada (levantamiento 2020), pero solo donde hay puntos: los huecos entre sectores y las zonas fuera de la bbox no frenan el agua.
+- No modela bombas, compuertas, viento ni lluvia local.
+- El nivel del río Salado es solo de monitoreo: no modula la simulación (otra cuenca y otro cero).
 - La cota es del terreno alrededor de la huella, no de la planta baja.
 - El rojo se asigna por cota, sin verificar conectividad con el polígono de agua.
 - El filtro cota ≤ 18 m asume el cero oficial y el máximo de 8 m. Si se sube mucho la calibración del cero, hay que regenerar los datos.
-- Los tiles y las cotas son una foto estática; no se actualizan solos.
+- La hidrografía permanente es una referencia visual de Overture/OSM: no cambia con el nivel del río y puede estar desactualizada.
+- El Río Coronda se ve en la capa permanente, pero no está incluido en el modelo de inundación porque queda fuera del DEM.
+- Los tiles, la hidrografía y las cotas son una foto estática; no se actualizan solos.
 
 ## Fuentes y créditos
 
 - **Nivel del río:** INA–SIyAH, serie 30; datos primarios de Prefectura Naval Argentina.
+- **Río Salado:** INA–SIyAH, serie 103 (estación Recreo).
+- **Terraplenes y zona de seguridad hídrica:** Municipalidad de Santa Fe.
 - **Edificios, distritos y vecinales:** Municipalidad de Santa Fe.
-- **Edificios del oeste:** Overture Maps Foundation.
+- **Edificios del oeste e hidrografía permanente:** Overture Maps Foundation / OpenStreetMap contributors.
 - **Relieve:** Mapzen Terrain Tiles / AWS Open Data.
 - **Satélite:** Sentinel-2 cloudless © EOX.
 - **Calles:** OpenFreeMap, © OpenMapTiles, © OpenStreetMap contributors.

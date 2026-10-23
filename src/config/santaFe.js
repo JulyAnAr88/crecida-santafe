@@ -24,6 +24,17 @@ export const LOCALIDAD = {
     cotaCero_m: 8.378,
     posicion: [-60.7002319185745, -31.6514772196376],
   },
+  salado: {
+    nombre: 'Estación Recreo',
+    rio: 'Río Salado',
+    serieId: 103,
+    unid: 103,
+    ceroIgn: 11.09,
+    posicion: [-60.78055556, -31.49122222],
+    umbrales: {
+      alerta: 4.7,
+    },
+  },
   umbrales: {
     aguasBajas: 2.0,
     alerta: 5.3,
@@ -38,6 +49,8 @@ export const LOCALIDAD = {
   capas: {
     distritos: 'publico:distrito',
     vecinales: 'publico:vecinal',
+    seguridad: 'publico:zona_seguridad_hidrica',
+    terraplenes: 'data/terraplenes.geojson',
   },
   fuentes: [
     {
